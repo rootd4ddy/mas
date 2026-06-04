@@ -5,7 +5,7 @@
   "data": [
     {
       "Source": "/web-components/dist/commerce.js",
-      "Destination": "https://w316qij2.instances.poc.jchunt.top/commerce.js",
+      "Destination": "https://cdn.jsdelivr.net/gh/rootd4ddy/mas@main/web-components/dist/commerce.js",
       "Type": "temporary"
     }
   ]
