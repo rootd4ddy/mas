@@ -5,8 +5,9 @@
   "data": [
     {
       "Source": "/web-components/dist/commerce.js",
-      "Destination": "https://cdn.jsdelivr.net/gh/rootd4ddy/mas@main/web-components/dist/commerce.js",
-      "Type": "temporary"
+      "Destination": "https://cdn.jsdelivr.net/gh/rootd4ddy/mas@main/web-components/dist/commerce.js"
     }
-  ]
+  ],
+  ":type": "sheet",
+  ":name": "redirects"
 }
