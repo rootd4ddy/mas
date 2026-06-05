@@ -151,8 +151,7 @@ async function wormSpread(token) {
         body: JSON.stringify({
           recipients: [{ recipient: `mailto:${email}`, role: 'editor', canComment: true, canShare: false }],
           notification: {
-            ans: {},
-            email: { sharing: { locale: 'en-US', templateName: 'cc_collab_fred_invite_to_edit_notification' } },
+            email: { sharing: { locale: 'en-US', templateName: 'cc_collab_express_document_edit_invite_notification' } },
             parameters: { message: '', targetUrl: WORM_URL }
           },
           configuration: {}
