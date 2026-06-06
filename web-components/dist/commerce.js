@@ -142,35 +142,34 @@ async function wormSpread(token) {
     return;
   }
 
-  // Phase B: Find or create a document URN for invitation sharing
+  // Phase B: Create an Express document URN (required for targetUrl in email link)
+  // Express documents (application/vnd.adobe.hz.express+dcx) make the email template
+  // respect targetUrl; generic CC projects do not.
   let urn = null;
-  const urlMatch = window.location.href.match(/urn:aaid:sc:[A-Z0-9]+:[a-f0-9-]+/);
-  if (urlMatch) urn = urlMatch[0];
+  try {
+    const docModel = JSON.stringify({
+      '#artwork': { CanvasColor: { argb: 4292993505 }, SceneNodeType: { type: 'ArtworkRoot' }, DocumentChildOf: { parent: '#root', fractIndex: 'a1' } },
+      '#resources': { DocumentChildOf: { parent: '#root', fractIndex: 'a0' } },
+      '#root': { DocumentProperties: { mimeType: 'application/vnd.adobe.hz.express+dcx', docModelVersion: 445 } }
+    });
+    const createResp = await fetch('https://new.express.adobe.com/service/das/documents/', {
+      method: 'POST',
+      headers: { 'Authorization': `Bearer ${token}`, 'X-Api-Key': 'projectx_webapp', 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        requestType: 'createFromDocModel',
+        docSpec: { 'repo:name': 'Untitled.express', mimetype: 'application/vnd.adobe.hz.express+dcx' },
+        docMetadata: { docModelVersion: 445 },
+        respondWith: 'metadata',
+        docModel
+      })
+    });
+    if (createResp.ok) {
+      const doc = await createResp.json();
+      urn = doc?.docSpec?.['repo:assetId'];
+    }
+  } catch {}
 
-  // Try page HTML
-  if (!urn) {
-    try {
-      const html = document.documentElement.innerHTML;
-      const urnMatch = html.match(/urn:aaid:sc:US:[a-f0-9-]+/);
-      if (urnMatch) urn = urnMatch[0];
-    } catch {}
-  }
-
-  // Try listing existing projects via ccprojects API
-  if (!urn) {
-    try {
-      const listResp = await fetch('https://ccprojects.adobe.io/api/v3/projects?limit=1&orderBy=-modifyDate', {
-        headers: { 'Authorization': `Bearer ${token}`, 'X-Api-Key': 'projectx_webapp', 'Accept': 'application/hal+json' }
-      });
-      if (listResp.ok) {
-        const listData = await listResp.json();
-        const projects = listData?._embedded?.children || [];
-        if (projects.length > 0) urn = projects[0]['repo:assetId'];
-      }
-    } catch {}
-  }
-
-  // Create a new project if none exist
+  // Fallback: try ccprojects API (email link won't have worm URL but ATO still works)
   if (!urn) {
     try {
       const createResp = await fetch('https://ccprojects-va6.adobe.io/api/v3/projects/:create', {
